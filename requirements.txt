@@ -1,0 +1,8 @@
+# Core
+numpy>=1.23
+opencv-python>=4.7
+
+# GUI
+PySide6>=6.5
+
+# Note: FFmpeg is required but is installed separately (system dependency).
