@@ -9,6 +9,8 @@ This repository contains two Python entrypoints:
 
 - **GUI (PySide6)**: `app_corrector_gui_segment_speedflags.py`
   - Desktop UI for selecting input/output, tuning parameters, previewing, and running the backend.
+ 
+- **App was built with the aid of ChatGPT LLM 5.2**
 
 ## Quick start
 
