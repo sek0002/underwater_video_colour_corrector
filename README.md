@@ -1,5 +1,8 @@
 # Colour Corrector for underwater footage/images
 
+## App preview
+![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
+
 This repository contains two Python entrypoints:
 
 - **Backend (CLI)**: `app_backend_segment_speedflags.py`
@@ -93,9 +96,6 @@ The GUI defaults to using the backend script in the same folder. If you move fil
 ├─ requirements.txt
 └─ .gitignore
 ```
-
-## App preview
-![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
 
 ## Inspiration
 This repo was inspired by https://github.com/nikolajbech/underwater-image-color-correction and https://github.com/bornfree/dive-color-corrector
