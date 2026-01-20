@@ -1,4 +1,4 @@
-# Colour Corrector 
+# Colour Corrector for underwater footage/images
 
 This repository contains two Python entrypoints:
 
