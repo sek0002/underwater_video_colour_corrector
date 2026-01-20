@@ -1,4 +1,4 @@
-# Blue Corrector (Segment + Speed Flags)
+# Colour Corrector (Segment + Speed Flags)
 
 This repository contains two Python entrypoints:
 
