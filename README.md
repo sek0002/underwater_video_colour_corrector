@@ -87,6 +87,6 @@ The GUI defaults to using the backend script in the same folder. If you move fil
 └─ .gitignore
 ```
 
-## License
+##Screenshots
+![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
 
-Add a license file that matches your intended distribution model (e.g., MIT, Apache-2.0, proprietary). This repo is provided without a license by default.
