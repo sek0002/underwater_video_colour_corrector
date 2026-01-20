@@ -87,6 +87,6 @@ The GUI defaults to using the backend script in the same folder. If you move fil
 └─ .gitignore
 ```
 
-##Screenshots
+## App preview
 ![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
 
