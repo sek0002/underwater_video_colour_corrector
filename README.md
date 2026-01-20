@@ -2,6 +2,8 @@
 
 ## App preview
 ![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
+![Playback](https://github.com/user-attachments/assets/c48c0914-ec3f-4a96-b44c-f4687f8e28c1)
+![Batch](https://github.com/user-attachments/assets/b81e59e0-f3ba-4db0-8cbb-cdffdb46aded)
 
 This repository contains two Python entrypoints:
 
@@ -86,6 +88,9 @@ The GUI defaults to using the backend script in the same folder. If you move fil
 
 - For the best experience, use Python 3.10+.
 - If OpenCV installation is problematic on your system, consider using a platform-specific wheel or a conda environment.
+- ffmpeg needs to be bundled with the GUI when building
+- Currently in pre-release/beta, script runs great but may be slow on large videos (2k/4k, high FPS). 
+- Downsample video output (max speed increase), disabling auto contrast/brightness (medium speed increase) or enabling performance flags (ie. fast shadows and lower HS map scale, lowest speed increase) are currently the best way to speed up processing speed. Further speed optimziations planned for future.
 
 ## Repository layout
 
