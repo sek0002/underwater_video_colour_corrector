@@ -1,4 +1,4 @@
-# Colour Corrector (Segment + Speed Flags)
+# Colour Corrector 
 
 This repository contains two Python entrypoints:
 
