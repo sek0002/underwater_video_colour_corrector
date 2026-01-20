@@ -71,7 +71,7 @@ python app_corrector_gui_segment_speedflags.py
 
 ##To build app yourself, bundle ffmpeg and script
 
-pyinstaller --noconfirm --clean --onedir --windowed --target-arch universal2   --name ColourCorrector   --add-data "app_backend_segment_speedflags.py:."   --add-binary "ffmpeg:."   --hidden-import numpy   --hidden-import numpy.core._multiarray_umath   --hidden-import cv2   app_corrector_gui_segment_speedflags.py
+pyinstaller --noconfirm --clean --onedir --windowed --name ColourCorrector   --add-data "app_backend_segment_speedflags.py:."   --add-binary "ffmpeg:."   --hidden-import numpy   --hidden-import numpy.core._multiarray_umath   --hidden-import cv2   app_corrector_gui_segment_speedflags.py
 
 ```
 
