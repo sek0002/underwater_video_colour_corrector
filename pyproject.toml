@@ -1,0 +1,18 @@
+[project]
+name = "blue-corrector"
+version = "0.1.0"
+description = "Python GUI + backend utilities for segment speed-flag correction"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = ""}]
+
+dependencies = [
+  "numpy",
+  "opencv-python",
+  "PySide6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
