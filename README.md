@@ -107,7 +107,8 @@ This repo was inspired by https://github.com/nikolajbech/underwater-image-color-
 
 ## Buy me a coffee if you appreciate the app
 Developed and maintained by Kevin Sek
-Buy me a coffee: https://buymeacoffee.com/sek0002
+
+<a href="https://www.buymeacoffee.com/sek0002" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
 Please share this with all your friends, especially the lazy ones who want to quickly correct their underwater videos and images!!!
 Please visit the Melbourne University Underwater Club (MUUC) if you are in Melbourne, Australia. We are an active club of passionate divers!
