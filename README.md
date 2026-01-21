@@ -104,3 +104,10 @@ The GUI defaults to using the backend script in the same folder. If you move fil
 
 ## Inspiration
 This repo was inspired by https://github.com/nikolajbech/underwater-image-color-correction and https://github.com/bornfree/dive-color-corrector
+
+## Buy me a coffee if you appreciate the app
+Developed and maintained by Kevin Sek
+Buy me a coffee: https://buymeacoffee.com/sek0002
+
+Please share this with all your friends, especially the lazy ones who want to quickly correct their underwater videos and images!!!
+Please visit the Melbourne University Underwater Club (MUUC) if you are in Melbourne, Australia. We are an active club of passionate divers!
