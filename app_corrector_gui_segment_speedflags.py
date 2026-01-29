@@ -651,44 +651,22 @@ class BlueCorrectorSingleGUI(QWidget):
             return None
 
     def _on_show_scopes_frame_toggled(self, enabled: bool):
-        # Keep the single source of truth as self.show_scopes (Playback checkbox)
+        """Frame-scrub scopes toggle (independent of playback scopes)."""
         try:
-            if hasattr(self, "show_scopes") and self.show_scopes.isChecked() != enabled:
-                # Block signal to avoid recursion
-                self.show_scopes.blockSignals(True)
-                self.show_scopes.setChecked(enabled)
-                self.show_scopes.blockSignals(False)
-            self._on_show_scopes_toggled(enabled)
+            self._on_show_scopes_frame_only(bool(enabled))
         except Exception:
             pass
+
+    def _on_show_scopes_frame_only(self, enabled: bool) -> None:
+        """Show/hide scopes in the Frame scrub tab only."""
+        if hasattr(self, "scopes_frame_orig"):
+            self.scopes_frame_orig.setVisible(enabled)
+        if hasattr(self, "scopes_frame_proc"):
+            self.scopes_frame_proc.setVisible(enabled)
 
     def _on_show_scopes_toggled(self, enabled: bool):
-        # Playback scopes widgets
-        if hasattr(self, "scopes_playback_orig"):
-            self.scopes_playback_orig.setVisible(enabled)
-        if hasattr(self, "scopes_playback_proc"):
-            self.scopes_playback_proc.setVisible(enabled)
-
-        # Frame scrub scopes widgets
-        if hasattr(self, "scopes_frame_orig"):
-            self.scopes_frame_orig.setVisible(enabled)
-        if hasattr(self, "scopes_frame_proc"):
-            self.scopes_frame_proc.setVisible(enabled)
-
-        # When hiding scopes, stop any playback scopes timer to save CPU
-        if not enabled:
-            try:
-                if getattr(self, "_play_scope_timer", None) is not None:
-                    self._play_scope_timer.stop()
-            except Exception:
-                pass
-        try:
-            if hasattr(self, "show_scopes_frame") and self.show_scopes_frame.isChecked() != enabled:
-                self.show_scopes_frame.blockSignals(True)
-                self.show_scopes_frame.setChecked(enabled)
-                self.show_scopes_frame.blockSignals(False)
-        except Exception:
-            pass
+        """Playback scopes toggle (independent of frame-scrub scopes)."""
+        enabled = bool(enabled)
 
         # Playback scopes widgets
         if hasattr(self, "scopes_playback_orig"):
@@ -696,13 +674,7 @@ class BlueCorrectorSingleGUI(QWidget):
         if hasattr(self, "scopes_playback_proc"):
             self.scopes_playback_proc.setVisible(enabled)
 
-        # Frame scrub scopes widgets
-        if hasattr(self, "scopes_frame_orig"):
-            self.scopes_frame_orig.setVisible(enabled)
-        if hasattr(self, "scopes_frame_proc"):
-            self.scopes_frame_proc.setVisible(enabled)
-
-        # When hiding scopes, stop any playback scopes timer to save CPU
+        # When hiding playback scopes, stop any playback scopes timer to save CPU
         if not enabled:
             try:
                 if getattr(self, "_play_scope_timer", None) is not None:
@@ -718,7 +690,6 @@ class BlueCorrectorSingleGUI(QWidget):
         except Exception:
             pass
         return str(Path.home())
-
     def _frame_render_current(self):
         """
         Slot for _frame_update_timer: render the currently selected preview frame
@@ -793,11 +764,13 @@ class BlueCorrectorSingleGUI(QWidget):
         self._preset_defs = None
         self._preset_btn_group = None
         self._preset_buttons = {}
+
+        # Cache of (orig_bgr, processed_bgr) per preset, generated from the last rendered frame.
+        # IMPORTANT: thumbnails are generated only when the base frame changes (frame scrub render),
+        # never in response to clicking a preset or resizing the strip.
+        self._preset_thumb_frames = {}
         self._preset_last_frame_bgr = None
-        self._preset_thumb_timer = QTimer(self)
-        self._preset_thumb_timer.setSingleShot(True)
-        self._preset_thumb_timer.setInterval(160)
-        self._preset_thumb_timer.timeout.connect(self._refresh_preset_thumbnails)
+
         self._preset_active_name = None
         
         root = QVBoxLayout(self)
@@ -1548,6 +1521,10 @@ class BlueCorrectorSingleGUI(QWidget):
         self.scopes_playback_orig = AsyncScopesWidget(title="Original")
         self.scopes_playback_proc = AsyncScopesWidget(title="Processed")
 
+        # Ensure initial visibility matches the playback checkbox (default OFF)
+        self.scopes_playback_orig.setVisible(False)
+        self.scopes_playback_proc.setVisible(False)
+
         orig_row = QHBoxLayout()
         orig_row.addWidget(self.video_orig, 1)
         orig_row.addWidget(self.scopes_playback_orig, 0)
@@ -1583,9 +1560,15 @@ class BlueCorrectorSingleGUI(QWidget):
         self.btn_preview_play.clicked.connect(self.preview_play_pause)
         self.btn_preview_stop.clicked.connect(self.preview_stop)
         self.show_scopes = QCheckBox("Show scopes")
-        self.show_scopes.setChecked(True)
+        self.show_scopes.setChecked(False)  # playback scopes default OFF
         self.show_scopes.toggled.connect(self._on_show_scopes_toggled)
         controls.addWidget(self.show_scopes)
+
+        # Apply initial playback scopes state
+        try:
+            self._on_show_scopes_toggled(self.show_scopes.isChecked())
+        except Exception:
+            pass
 
         self.preview_slider = ClickSeekSlider(Qt.Horizontal)
         self.preview_slider.clickedValue.connect(self.preview_seek)
@@ -1712,7 +1695,6 @@ class BlueCorrectorSingleGUI(QWidget):
         # Keep preset thumbnails sized to the current preview video height.
         try:
             self._preset_resize_hook = _ResizeHook(self._update_preset_strip_geometry)
-            self.frame_label_orig.installEventFilter(self._preset_resize_hook)
             self.tab_frame.installEventFilter(self._preset_resize_hook)
         except Exception:
             pass
@@ -1724,7 +1706,7 @@ class BlueCorrectorSingleGUI(QWidget):
         self.frame_slider.sliderReleased.connect(self._on_frame_slider_released)
         # Frame scrub: show/hide scopes (sync with playback checkbox)
         self.show_scopes_frame = QCheckBox("Show scopes")
-        self.show_scopes_frame.setChecked(self.show_scopes.isChecked())
+        self.show_scopes_frame.setChecked(True)  # independent default for Frame scrub scopes
         self.show_scopes_frame.toggled.connect(self._on_show_scopes_frame_toggled)
         scrub_controls.addWidget(self.show_scopes_frame)
         self.frame_time = QLabel("00:00")
@@ -1906,17 +1888,18 @@ class BlueCorrectorSingleGUI(QWidget):
         buttons = getattr(self, "_preset_buttons", None) or {}
         if scroll is None or not buttons:
             return
-
-        # Use the current preview label height as the driver.
+        # Use the tab height as the driver (NOT the preview label height).
+        # Using the label height creates a feedback loop because changing the strip height
+        # changes the available label height, which can cause oscillation/jitter.
         try:
-            video_h = int(getattr(self, "frame_label_orig", None).height())
+            tab_h = int(getattr(self, "tab_frame", None).height())
         except Exception:
-            video_h = 0
-        if video_h <= 0:
+            tab_h = 0
+        if tab_h <= 0:
             return
 
-        # Allocate a meaningful fraction of the preview height to the strip.
-        strip_h = max(120, min(440, int(video_h * 0.55)))
+        # Allocate a meaningful fraction of the tab height to the strip.
+        strip_h = max(120, min(440, int(tab_h * 0.22)))
         scroll.setMinimumHeight(strip_h)
         scroll.setMaximumHeight(strip_h)
         if inner is not None:
@@ -1926,6 +1909,11 @@ class BlueCorrectorSingleGUI(QWidget):
         label_room = 44
         icon_h = max(48, strip_h - label_room)
         icon_w = max(64, int(icon_h * 16 / 9))
+        # Avoid resize→thumbnail-refresh→resize jitter: only apply geometry when it changes.
+        new_geom = (strip_h, icon_w, icon_h)
+        if getattr(self, "_preset_geom_cache", None) == new_geom:
+            return
+        self._preset_geom_cache = new_geom
 
         for b in buttons.values():
             try:
@@ -1937,13 +1925,33 @@ class BlueCorrectorSingleGUI(QWidget):
             except Exception:
                 pass
 
-        # If a frame is available, re-render thumbnails at the new size.
-        try:
-            if getattr(self, "_frame_loaded", False) and getattr(self, "_preset_last_frame_bgr", None) is not None:
-                if getattr(self, "_preset_thumb_timer", None) is not None:
-                    self._preset_thumb_timer.start()
-        except Exception:
-            pass
+        # Resize should NOT trigger a thumbnail re-render (it causes flicker / cross-thumbnail refresh).
+        # Instead, just rescale icons from the already-cached thumbnail frames.
+        self._update_preset_icons_from_cache()
+
+
+    def _update_preset_icons_from_cache(self) -> None:
+        """Rescale preset button icons from cached thumbnail frames (no re-render)."""
+        buttons = getattr(self, "_preset_buttons", None) or {}
+        cache = getattr(self, "_preset_thumb_frames", None) or {}
+        if not buttons or not cache:
+            return
+        for name, btn in buttons.items():
+            try:
+                cached = cache.get(name)
+                if cached is None or not isinstance(cached, tuple) or len(cached) != 2:
+                    continue
+                _orig_bgr, proc_bgr = cached
+                if proc_bgr is None:
+                    continue
+                tw = int(btn.iconSize().width()) if btn.iconSize().width() > 0 else 160
+                th = int(btn.iconSize().height()) if btn.iconSize().height() > 0 else 90
+                pm = self._np_bgr_to_pixmap(proc_bgr, max_w=tw, max_h=th, fill=True)
+                btn.setIcon(QIcon(pm))
+            except Exception:
+                # Best-effort; keep prior icon.
+                pass
+
 
     def _np_bgr_to_pixmap(self, img_bgr: np.ndarray, *, max_w: int, max_h: int, fill: bool = False) -> QPixmap:
         if img_bgr is None or img_bgr.size == 0:
@@ -1974,6 +1982,29 @@ class BlueCorrectorSingleGUI(QWidget):
             else:
                 pm = pm.scaled(max_w, max_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         return pm
+
+    def _downsample_bgr_max(self, frame_bgr: np.ndarray, *, max_w: int = 854, max_h: int = 480) -> np.ndarray:
+        """Downsample a BGR frame to fit within (max_w,max_h) preserving aspect.
+
+        Used to clamp the compute cost of preset thumbnail generation.
+        """
+        if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+            return frame_bgr
+        if cv2 is None:
+            return frame_bgr
+        try:
+            h, w = frame_bgr.shape[:2]
+            if w <= 0 or h <= 0:
+                return frame_bgr
+            # Scale so both dimensions are <= their respective maxima.
+            scale = max(w / float(max_w), h / float(max_h), 1.0)
+            if scale <= 1.0:
+                return frame_bgr
+            nw = max(2, int(w / scale))
+            nh = max(2, int(h / scale))
+            return cv2.resize(frame_bgr, (nw, nh), interpolation=cv2.INTER_AREA)
+        except Exception:
+            return frame_bgr
 
 
     def _ensure_frame_cap(self) -> bool:
@@ -2237,7 +2268,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 100,
                 "blue_magic_value": 1.20,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.30,
                 "shadow_amount_percent": 0.70,
                 "shadow_tone_percent": 1.00,
@@ -2257,7 +2288,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 100,
                 "blue_magic_value": 1.20,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.30,
                 "shadow_amount_percent": 0.70,
                 "shadow_tone_percent": 1.00,
@@ -2276,7 +2307,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 160,
                 "blue_magic_value": 0.95,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.25,
                 "shadow_amount_percent": 0.60,
                 "shadow_tone_percent": 0.95,
@@ -2295,7 +2326,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 120,
                 "blue_magic_value": 1.10,
                 "sample_seconds": 3.0,
-                "sample_window_samples": 31,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.35,
                 "shadow_amount_percent": 0.80,
                 "shadow_tone_percent": 0.95,
@@ -2313,7 +2344,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 200,
                 "blue_magic_value": 0.90,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.30,
                 "shadow_amount_percent": 0.60,
                 "shadow_tone_percent": 1.00,
@@ -2332,7 +2363,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 190,
                 "blue_magic_value": 1.05,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.28,
                 "shadow_amount_percent": 0.60,
                 "shadow_tone_percent": 1.00,
@@ -2351,7 +2382,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 140,
                 "blue_magic_value": 1.10,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.18,
                 "shadow_amount_percent": 0.55,
                 "shadow_tone_percent": 0.95,
@@ -2369,7 +2400,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 90,
                 "blue_magic_value": 1.10,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.20,
                 "shadow_amount_percent": 0.55,
                 "shadow_tone_percent": 0.85,
@@ -2388,7 +2419,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "max_hue_shift": 220,
                 "blue_magic_value": 1.4,
                 "sample_seconds": 2.0,
-                "sample_window_samples": 15,
+                "sample_window_samples": 5,
                 "clip_hist_percent_in": 0.35,
                 "shadow_amount_percent": 0.62,
                 "shadow_tone_percent": 1.00,
@@ -2439,7 +2470,7 @@ class BlueCorrectorSingleGUI(QWidget):
             },
         }
 
-    def _apply_preset_to_widgets(self, preset_name: str) -> None:
+    def _apply_preset_to_widgets(self, preset_name: str, *, schedule_render: bool = True) -> None:
         defs = getattr(self, "_preset_defs", None) or {}
         p = defs.get(preset_name)
         if not p:
@@ -2490,19 +2521,81 @@ class BlueCorrectorSingleGUI(QWidget):
         finally:
             self._frame_param_guard = False
 
-        # Ensure a refresh for single-frame preview.
+        # Optionally refresh the single-frame preview. When presets are clicked we
+        # prefer cached frames to avoid regenerating all thumbnails.
+        if schedule_render:
+            try:
+                self._schedule_frame_render(int(getattr(self, "_frame_last_rel_ms", 0) or 0))
+            except Exception:
+                pass
+
+    def _on_preset_button_clicked(self, preset_name: str) -> None:
+        """Apply preset params and update the frame preview using cached thumbnail frames when available."""
+        # Stop any pending frame renders; clicking a preset should be instantaneous.
         try:
-            self._schedule_frame_render(int(getattr(self, "_frame_last_rel_ms", 0) or 0))
+            if getattr(self, "_frame_req_timer", None) is not None:
+                self._frame_req_timer.stop()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_frame_update_timer", None) is not None:
+                self._frame_update_timer.stop()
         except Exception:
             pass
 
-    def _on_preset_button_clicked(self, preset_name: str) -> None:
-        self._apply_preset_to_widgets(preset_name)
+        # Apply preset to widgets, but guard against triggering an async frame regen via valueChanged handlers.
+        try:
+            self._frame_param_guard = True
+            self._apply_preset_to_widgets(preset_name, schedule_render=False)
+        finally:
+            self._frame_param_guard = False
+
+        # Prefer using the already-rendered thumbnail frames for preview (no re-seek/decode).
+        cached = getattr(self, "_preset_thumb_frames", {}).get(preset_name)
+        if cached is not None and isinstance(cached, tuple) and len(cached) == 2:
+            orig_bgr, proc_bgr = cached
+            if orig_bgr is not None and proc_bgr is not None:
+                try:
+                    self._frame_loaded = True
+                except Exception:
+                    pass
+
+                try:
+                    pm_o = self._np_bgr_to_pixmap(orig_bgr, max_w=self.frame_label_orig.width(), max_h=self.frame_label_orig.height())
+                    self.frame_label_orig.setPixmap(pm_o)
+                except Exception:
+                    pass
+                try:
+                    pm_p = self._np_bgr_to_pixmap(proc_bgr, max_w=self.frame_label_proc.width(), max_h=self.frame_label_proc.height())
+                    self.frame_label_proc.setPixmap(pm_p)
+                except Exception:
+                    pass
+
+                # Update scopes if enabled
+                try:
+                    if hasattr(self, "show_scopes_frame") and self.show_scopes_frame.isChecked():
+                        if hasattr(self, "scopes_frame_orig"):
+                            self.scopes_frame_orig.set_frame_bgr(orig_bgr)
+                        if hasattr(self, "scopes_frame_proc"):
+                            self.scopes_frame_proc.set_frame_bgr(proc_bgr)
+                except Exception:
+                    pass
+                return
+
+        # Fallback: regenerate using normal pipeline if no cache is available.
+        try:
+            self._refresh_frame_preview()
+        except Exception:
+            pass
 
     def _refresh_preset_thumbnails(self) -> None:
-        """Re-render preset thumbnail buttons from the last captured original frame."""
-        frame_bgr = getattr(self, "_preset_last_frame_bgr", None)
-        if frame_bgr is None:
+        """Re-render preset thumbnail buttons from the last captured original frame.
+
+        Important: use the cached frame already captured for Frame scrub preview (self._preset_last_frame_bgr)
+        instead of re-reading/decoding a frame for each preset.
+        """
+        base_bgr = getattr(self, "_preset_last_frame_bgr", None)
+        if base_bgr is None:
             return
         if not getattr(self, "_preview_available", False):
             return
@@ -2513,7 +2606,78 @@ class BlueCorrectorSingleGUI(QWidget):
         if mod is None:
             return
 
+        # Optional: compute a stabilised filter RGB estimate once (shared across presets).
+        # NOTE: we downsample sampled frames to ~720p before accumulating to keep this cheap.
+        filter_rgb_override = None
+        try:
+            win = int(self.sample_window_samples.value()) if hasattr(self, "sample_window_samples") else 1
+        except Exception:
+            win = 1
+
+        if win and win > 1 and cv2 is not None and getattr(self, "_frame_cap", None) is not None:
+            if win % 2 == 0:
+                win += 1
+            try:
+                cap = self._frame_cap
+                rel_ms = int(max(0, getattr(self, "_frame_last_rel_ms", 0)))
+                abs_ms = int(self._orig_base_ms()) + rel_ms
+
+                dt_ms = float(self.sample_seconds.value()) * 1000.0 if hasattr(self, "sample_seconds") else 0.0
+                if dt_ms <= 0:
+                    dt_ms = 1000.0  # fallback 1s
+
+                half = win // 2
+                acc = None
+                n = 0
+                # Save current position so we can restore it
+                try:
+                    pos_ms_before = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+                except Exception:
+                    pos_ms_before = float(abs_ms)
+
+                for j in range(-half, half + 1):
+                    t_ms = float(abs_ms) + (float(j) * dt_ms)
+                    if t_ms < 0:
+                        continue
+                    try:
+                        cap.set(cv2.CAP_PROP_POS_MSEC, t_ms)
+                        ok2, fr2 = cap.read()
+                    except Exception:
+                        ok2, fr2 = False, None
+
+                    if (not ok2) or fr2 is None:
+                        continue
+
+                    fr2 = self._downsample_bgr_max(fr2, max_w=1280, max_h=720)
+                    rgb2 = fr2[..., ::-1]  # BGR->RGB
+                    rgb2 = np.ascontiguousarray(rgb2, dtype=np.float32)
+                    if acc is None:
+                        acc = rgb2
+                    else:
+                        acc += rgb2
+                    n += 1
+
+                if acc is not None and n > 0:
+                    filter_rgb_override = (acc / float(n)).astype(np.uint8)
+
+                # Restore original position for any subsequent reads
+                try:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, pos_ms_before)
+                except Exception:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, float(abs_ms))
+            except Exception:
+                filter_rgb_override = None
+
         defs = getattr(self, "_preset_defs", None) or {}
+
+        # Clamp preset thumbnail compute cost: downsample once to ~720p before colour correction.
+        thumb_base_bgr = self._downsample_bgr_max(base_bgr, max_w=854, max_h=480)
+
+
+        # Ensure cache dict exists
+        if not hasattr(self, "_preset_thumb_frames") or getattr(self, "_preset_thumb_frames", None) is None:
+            self._preset_thumb_frames = {}
+
         for name, btn in list(getattr(self, "_preset_buttons", {}).items()):
             try:
                 p = defs.get(name)
@@ -2558,16 +2722,22 @@ class BlueCorrectorSingleGUI(QWidget):
                 mod.FAST_HS_MAP_SCALE = float(p.get("fast_hs_map_scale", old["FAST_HS_MAP_SCALE"] or 0.5))
 
                 out_bgr = mod.correct_frame_full(
-                    frame_bgr,
+                    thumb_base_bgr,
                     disable_auto_contrast=bool(p.get("disable_auto_contrast", False)),
                     clip_hist_percent=float(p.get("clip_hist_percent_in", 0.3)),
                     use_fast_hs=bool(p.get("fast_hs", False)),
                     fast_hs_map_scale=float(p.get("fast_hs_map_scale", 0.5)),
+                    filter_rgb_override=filter_rgb_override,
                 )
-                # Fill the thumbnail box (crop as needed) to avoid letterboxing.
-                target = btn.iconSize() if hasattr(btn, "iconSize") else QSize(160, 90)
-                tw = int(target.width()) if target and target.width() > 0 else 160
-                th = int(target.height()) if target and target.height() > 0 else 90
+
+                # Cache frames for instant preview when this preset is selected
+                try:
+                    self._preset_thumb_frames[name] = (thumb_base_bgr.copy(), out_bgr.copy())
+                except Exception:
+                    pass
+
+                tw = int(btn.iconSize().width()) if btn.iconSize().width() > 0 else 160
+                th = int(btn.iconSize().height()) if btn.iconSize().height() > 0 else 90
                 pm = self._np_bgr_to_pixmap(out_bgr, max_w=tw, max_h=th, fill=True)
                 btn.setIcon(QIcon(pm))
             except Exception:
@@ -2610,11 +2780,10 @@ class BlueCorrectorSingleGUI(QWidget):
             rel_ms = min(rel_ms, int(self._preview_window_ms))
 
         self._frame_loaded = True
-        # Update preset thumbnails using this original frame (debounced).
+        # Update preset thumbnails using this original frame (ONLY when the base frame changes).
         try:
-            self._preset_last_frame_bgr = frame_bgr
-            if self._preset_thumb_timer is not None:
-                self._preset_thumb_timer.start()
+            self._preset_last_frame_bgr = frame_bgr.copy()
+            self._refresh_preset_thumbnails()
         except Exception:
             pass
 
