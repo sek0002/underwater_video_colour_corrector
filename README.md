@@ -6,6 +6,9 @@
 ![Playback](https://github.com/user-attachments/assets/c48c0914-ec3f-4a96-b44c-f4687f8e28c1)
 ![Batch](https://github.com/user-attachments/assets/b81e59e0-f3ba-4db0-8cbb-cdffdb46aded)
 
+## Download Link
+https://github.com/sek0002/underwater_video_colour_corrector/releases
+
 This repository contains two Python entrypoints:
 
 - **Backend (CLI)**: `app_backend_segment_speedflags.py`
