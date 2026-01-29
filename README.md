@@ -1,4 +1,5 @@
-# Colour Corrector for underwater footage/images
+# Colour Corrector for underwater footage/images <img align="right" width="150" height="150" alt="UVCC" src="https://github.com/user-attachments/assets/8957cf51-e8a5-4ed3-80c0-2d139271ee60" />
+
 
 ## App preview
 ![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
