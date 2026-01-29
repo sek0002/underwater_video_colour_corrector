@@ -8,6 +8,7 @@
 
 ## Download Link
 https://github.com/sek0002/underwater_video_colour_corrector/releases
+Alt link/older versions: https://sek0002.duckdns.org/apps/files/files/5473507?dir=/Shared%20Folders/DCC_mod
 
 This repository contains two Python entrypoints:
 
