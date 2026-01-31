@@ -1,9 +1,14 @@
-# Colour Corrector for underwater footage/images
+# Colour Corrector for underwater footage/images <img align="right" width="150" height="150" alt="UVCC" src="https://github.com/user-attachments/assets/8957cf51-e8a5-4ed3-80c0-2d139271ee60" />
+
 
 ## App preview
 ![Preview](https://github.com/user-attachments/assets/ba5204cb-417b-4bb8-8afd-e5bd88af3a2e)
 ![Playback](https://github.com/user-attachments/assets/c48c0914-ec3f-4a96-b44c-f4687f8e28c1)
 ![Batch](https://github.com/user-attachments/assets/b81e59e0-f3ba-4db0-8cbb-cdffdb46aded)
+
+## Download Link
+- https://github.com/sek0002/underwater_video_colour_corrector/releases
+- Alt link/older versions: https://sek0002.duckdns.org/apps/files/files/5473507?dir=/Shared%20Folders/DCC_mod
 
 This repository contains two Python entrypoints:
 
