@@ -24,8 +24,8 @@ shadow_radius=0
 highlight_amount_percent=0 ##decrease high lights 0 ~ 1 (recommend 0.2:blue water)
 highlight_tone_percent=0
 highlight_radius=0
-USE_FAST_HS = False
-FAST_HS_MAP_SCALE = 0.5
+USE_FAST_HS = True
+FAST_HS_MAP_SCALE = 0.25
 
 def mux_audio_from_source(source_video_path: str, corrected_video_path: str, final_output_path: str):
     ffmpeg = find_ffmpeg()
@@ -561,11 +561,34 @@ def _sanitize_window_samples(n: int) -> int:
         n += 1
     return n
 
-def analyze_video(input_video_path, output_video_path, *, downsample: int = 1):
+def analyze_video(input_video_path, output_video_path, *, downsample: int = 1, fps_downsample: int = 1, max_fps: float = 0.0):
     
     # Initialize new video writer
     cap = cv2.VideoCapture(input_video_path)
-    fps = math.ceil(cap.get(cv2.CAP_PROP_FPS))
+    fps_in = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    if fps_in <= 0.0:
+        fps_in = 30.0
+    # Use a rounded FPS for sampling cadence.
+    fps = max(1, int(round(fps_in)))
+
+    # FPS downsampling (drop frames + lower output FPS to preserve duration)
+    fps_ds = int(fps_downsample or 1)
+    if fps_ds < 1:
+        fps_ds = 1
+
+    # Optional max-FPS cap (converted to an additional FPS downsample factor)
+    try:
+        max_fps_val = float(max_fps or 0.0)
+    except Exception:
+        max_fps_val = 0.0
+    if max_fps_val > 0.0 and fps_in > 0.0:
+        # Ensure output FPS <= max_fps_val
+        need = int(math.ceil(fps_in / max_fps_val))
+        if need < 1:
+            need = 1
+        fps_ds = max(fps_ds, need)
+
+    fps_out = fps_in / float(fps_ds)
     frame_count = math.ceil(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Compute stable downsample dimensions once (and keep them even where possible).
@@ -651,8 +674,11 @@ def analyze_video(input_video_path, output_video_path, *, downsample: int = 1):
     yield {
         "input_video_path": input_video_path,
         "output_video_path": output_video_path,
-        "fps": fps,
+        "fps": float(fps_out),
+        "fps_in": float(fps_in),
+        "fps_downsample": int(fps_ds),
         "frame_count": count,
+        "frame_count_out": int(math.ceil(count / float(fps_ds))) if fps_ds > 1 else int(count),
         "filters": filter_matrices,
         "filter_indices": filter_matrix_indexes,
         "downsample": int(downsample) if downsample else 1,
@@ -765,6 +791,19 @@ def process_video(
         out_w = max(2, out_w - 1)
     if out_h % 2 == 1:
         out_h = max(2, out_h - 1)
+    # Optional: force a specific output geometry (e.g., exact --max-height) while maintaining aspect ratio.
+    try:
+        fw = int(video_data.get("force_out_w", 0) or 0)
+        fh = int(video_data.get("force_out_h", 0) or 0)
+    except Exception:
+        fw = fh = 0
+    if fw > 0 and fh > 0:
+        out_w = max(2, int(fw))
+        out_h = max(2, int(fh))
+        if out_w % 2 == 1:
+            out_w = max(2, out_w - 1)
+        if out_h % 2 == 1:
+            out_h = max(2, out_h - 1)
 
     # fourcc = cv2.VideoWriter_fourcc(*'avc1')
     # new_video = cv2.VideoWriter(video_data["output_video_path"], fourcc, video_data["fps"], (frame_width, frame_height))
@@ -795,6 +834,12 @@ def process_video(
     filter_matrix_size = int(filter_matrices.shape[1])
 
     frame_count = int(video_data.get("frame_count", 0)) or int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    fps_ds = int(video_data.get("fps_downsample", 1) or 1)
+    if fps_ds < 1:
+        fps_ds = 1
+    frame_count_out = int(video_data.get("frame_count_out", 0) or 0)
+    if frame_count_out <= 0:
+        frame_count_out = int(math.ceil(frame_count / float(fps_ds))) if (frame_count > 0 and fps_ds > 1) else int(frame_count)
     fps = float(video_data.get("fps", 0) or cap.get(cv2.CAP_PROP_FPS) or 0)
     if auto_contrast_every_n_frames is None:
         auto_contrast_every_n_frames = max(1, int(fps) if fps > 0 else 30)
@@ -827,21 +872,33 @@ def process_video(
     # Previous filter for temporal stabilisation (EMA + clamp)
     prev_filt = None
 
-    count = 0
+    src_count = 0
+    out_count = 0
     while cap.isOpened():
+        # Read/skip frames for FPS downsampling efficiently.
         ret, frame_bgr = cap.read()
         if not ret:
             break
+        src_count += 1
 
-        # Optional downsample for speed. IMPORTANT: resize to the fixed encoder size.
+        if fps_ds > 1:
+            # Keep only every Nth frame (0-based).
+            if ((src_count - 1) % fps_ds) != 0:
+                # We already decoded this frame; continue. Subsequent frames will be read in-loop.
+                continue
+
+        out_count += 1
+        # src_count is the frame number in the original stream; use it for filter interpolation.
+        src_frame_number = src_count
+
+        # Optional spatial downsample for speed. IMPORTANT: resize to the fixed encoder size.
         if ds > 1:
             frame_bgr = cv2.resize(frame_bgr, (out_w, out_h), interpolation=cv2.INTER_AREA)
 
-        count += 1
 
         # Progress
-        if frame_count > 0:
-            pct = (100.0 * count) / frame_count
+        if frame_count_out > 0:
+            pct = (100.0 * out_count) / frame_count_out
             ipct = int(pct)
             if ipct != last_pct:
                 last_pct = ipct
@@ -849,14 +906,14 @@ def process_video(
 
         # # Apply the per-frame filter (operate in RGB because apply_filter() expects RGB ordering in this script)
         # rgb_mat = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        # filt = get_interpolated_filter_matrix(count)
+        # filt = get_interpolated_filter_matrix(src_frame_number)
         # corrected_rgb = apply_filter(rgb_mat, filt)
         # corrected_bgr = cv2.cvtColor(corrected_rgb, cv2.COLOR_RGB2BGR)
 
         # Apply the per-frame filter without cvtColor:
         # apply_filter() expects RGB ordering, so create an RGB view of the BGR frame via channel swap.
         rgb_view = frame_bgr[..., ::-1]  # BGR -> RGB view (no color conversion math)
-        filt_raw = np.asarray(get_interpolated_filter_matrix(count), dtype=np.float32)
+        filt_raw = np.asarray(get_interpolated_filter_matrix(src_frame_number), dtype=np.float32)
 
         # Option 2: EMA smoothing (temporal inertia) + Option 3: per-frame delta clamp
         # Both operate in filter-coefficient space (float32). Values:
@@ -899,7 +956,7 @@ def process_video(
             # alpha = 1.0
             # beta = 0.0
         else:
-            should_recompute = (count == 1) or (auto_contrast_every_n_frames > 0 and (count % auto_contrast_every_n_frames) == 0)
+            should_recompute = (out_count == 1) or (auto_contrast_every_n_frames > 0 and (out_count % auto_contrast_every_n_frames) == 0)
             if should_recompute:
                 auto_tmp, alpha_new, beta_new = automatic_brightness_and_contrast(corrected_bgr)
 
@@ -976,7 +1033,7 @@ def process_video(
             height = preview.shape[0] // 2
             preview[:, width:] = corrected_bgr[:, width:]
             preview = cv2.resize(preview, (width, height))
-            percent = (100.0 * count / frame_count) if frame_count > 0 else 0.0
+            percent = (100.0 * out_count / frame_count_out) if frame_count_out > 0 else 0.0
             yield percent, cv2.imencode('.png', preview)[1].tobytes()
         else:
             yield None
@@ -995,6 +1052,50 @@ def process_video(
     if rc != 0:
         raise RuntimeError(f"ffmpeg encoder failed (exit {rc}):\n{stderr}")
 
+def _downsample_from_max_res(base_w: int, base_h: int, *, max_w: int = 0, max_h: int = 0, max_dim: int = 0) -> int:
+    """Compute an integer downsample factor so that (base_w//ds, base_h//ds) fits within the requested max resolution.
+
+    - If max_dim is provided (>0), it is applied to the longer side (both max_w and max_h set to max_dim).
+    - Returns ds >= 1.
+    """
+    try:
+        bw = int(base_w or 0)
+        bh = int(base_h or 0)
+    except Exception:
+        return 1
+    if bw <= 0 or bh <= 0:
+        return 1
+
+    try:
+        md = int(max_dim or 0)
+    except Exception:
+        md = 0
+    if md > 0:
+        max_w = md
+        max_h = md
+
+    try:
+        mw = int(max_w or 0)
+        mh = int(max_h or 0)
+    except Exception:
+        mw = 0
+        mh = 0
+
+    if mw <= 0 and mh <= 0:
+        return 1
+    if mw <= 0:
+        mw = bw
+    if mh <= 0:
+        mh = bh
+
+    mw = max(1, mw)
+    mh = max(1, mh)
+
+    # Need ds so that bw/ds <= mw and bh/ds <= mh  => ds >= bw/mw and ds >= bh/mh
+    ds = int(math.ceil(max(bw / float(mw), bh / float(mh), 1.0)))
+    return max(1, ds)
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -1012,6 +1113,12 @@ if __name__ == "__main__":
     p_vid.add_argument("--start-sec", type=float, default=None, help="Start time (seconds) for segment processing")
     p_vid.add_argument("--duration-sec", type=float, default=None, help="Duration (seconds) for segment processing")
     p_vid.add_argument("--downsample", type=int, default=1, help="Downsample factor for video processing (1=full, 2=half, 4=quarter).")
+    p_vid.add_argument("--max-width", type=int, default=0, help="Max output width. If set, backend computes an additional downsample so output width <= max-width.")
+    p_vid.add_argument("--max-height", type=int, default=0, help="Max output height. If set, backend computes an additional downsample so output height <= max-height.")
+    p_vid.add_argument("--force-height", action="store_true", help="Force output height exactly to --max-height (aspect ratio preserved).")
+    p_vid.add_argument("--max-dim", type=int, default=0, help="Max output dimension for the longer side. Convenience for setting both --max-width/--max-height.")
+    p_vid.add_argument("--fps-downsample", type=int, default=1, help="FPS downsample factor (1=keep all frames, 2=every 2nd frame, etc.). Output FPS is divided by this factor to preserve duration.")
+    p_vid.add_argument("--max-fps", type=float, default=0.0, help="Optional cap for output FPS. If >0, backend will increase the FPS downsample factor so that output FPS <= max-fps (while preserving duration).")
 
     # Shared tuning knobs
     def add_tuning(p):
@@ -1139,8 +1246,11 @@ if __name__ == "__main__":
     ac_max_delta_beta = float(getattr(args, "ac_max_delta_beta", 0.0) or 0.0)
     ac_max_delta_beta = max(0.0, ac_max_delta_beta)
     video_downsample = int(getattr(args, "downsample", 1) or 1)
+    fps_downsample = int(getattr(args, "fps_downsample", 1) or 1)
     if video_downsample < 1:
         video_downsample = 1
+    if fps_downsample < 1:
+        fps_downsample = 1
 
     if args.mode == "image":
         mat = cv2.imread(args.source_image_path)
@@ -1168,15 +1278,66 @@ if __name__ == "__main__":
                 trimmed_src = str(Path(tmp_dir) / "trimmed_source.mp4")
                 ffmpeg_trim_segment(args.source_video_path, start_sec, duration_sec, trimmed_src)
                 source_for_processing = trimmed_src
+            # Optional: derive downsample from a max-resolution constraint (in addition to --downsample).
+            try:
+                mw = int(getattr(args, 'max_width', 0) or 0)
+                mh = int(getattr(args, 'max_height', 0) or 0)
+                md = int(getattr(args, 'max_dim', 0) or 0)
+            except Exception:
+                mw = mh = md = 0
+            if (mw > 0) or (mh > 0) or (md > 0):
+                try:
+                    _cap_probe = cv2.VideoCapture(source_for_processing)
+                    bw = int(_cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                    bh = int(_cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                    _cap_probe.release()
+                except Exception:
+                    bw = bh = 0
+                ds_box = _downsample_from_max_res(bw, bh, max_w=mw, max_h=mh, max_dim=md)
+                video_downsample = max(1, int(video_downsample), int(ds_box))
 
             # 1) Analyze -> build video_data
             video_data = None
-            for item in analyze_video(source_for_processing, args.output_video_path, downsample=video_downsample):
+            max_fps = float(getattr(args, "max_fps", 0.0) or 0.0)
+
+            for item in analyze_video(source_for_processing, args.output_video_path, downsample=video_downsample, fps_downsample=fps_downsample, max_fps=max_fps):
                 if isinstance(item, dict):
                     video_data = item
                     break
             if video_data is None:
                 raise RuntimeError("analyze_video() did not return video_data")
+            # If requested, force the final output height exactly to --max-height (aspect ratio preserved).
+            # This is applied at encode time (process_video) via a final resize to the target geometry.
+            try:
+                _force_h = bool(getattr(args, "force_height", False))
+            except Exception:
+                _force_h = False
+            if _force_h:
+                try:
+                    _mh_force = int(getattr(args, "max_height", 0) or 0)
+                except Exception:
+                    _mh_force = 0
+                if _mh_force > 0:
+                    try:
+                        _cap_probe2 = cv2.VideoCapture(source_for_processing)
+                        _bw2 = int(_cap_probe2.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                        _bh2 = int(_cap_probe2.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                        _cap_probe2.release()
+                    except Exception:
+                        _bw2 = _bh2 = 0
+                    if _bw2 > 0 and _bh2 > 0:
+                        # Derive width from forced height, preserving aspect ratio.
+                        _out_h_force = int(_mh_force)
+                        _out_w_force = int(round(_bw2 * (_out_h_force / float(_bh2))))
+                        # Ensure even dimensions for yuv420p.
+                        if _out_h_force % 2 == 1:
+                            _out_h_force = max(2, _out_h_force - 1)
+                        if _out_w_force % 2 == 1:
+                            _out_w_force = max(2, _out_w_force - 1)
+                        _out_h_force = max(2, _out_h_force)
+                        _out_w_force = max(2, _out_w_force)
+                        video_data["force_out_h"] = _out_h_force
+                        video_data["force_out_w"] = _out_w_force
 
             # 2) Write corrected video-only output to a temporary file
             out_final = args.output_video_path

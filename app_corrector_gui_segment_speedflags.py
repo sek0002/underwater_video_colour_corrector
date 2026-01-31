@@ -273,7 +273,6 @@ class AsyncScopesWidget(QWidget):
       - set_frame_bgr(frame_bgr): schedule async recompute; latest-frame-wins; drop if busy
       - set_mode("parade"|"waveform"|"both"): (optional) default "both"
     """
-
     def __init__(self, title: str = "Scopes"):
         super().__init__()
 
@@ -512,6 +511,29 @@ class AsyncScopesWidget(QWidget):
 
 
 class BlueCorrectorSingleGUI(QWidget):
+    # def _probe_video_info(self, path: Path) -> str:
+    #     if cv2 is None:
+    #         return ""
+
+    #     cap = cv2.VideoCapture(str(path))
+    #     try:
+    #         if not cap.isOpened():
+    #             return ""
+
+    #         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    #         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    #         fps = cap.get(cv2.CAP_PROP_FPS)
+
+    #         if w <= 0 or h <= 0:
+    #             return ""
+
+    #         if fps and fps > 0:
+    #             return f"{w}×{h} @ {fps:.2f} fps"
+    #         else:
+    #             return f"{w}×{h}"
+    #     finally:
+    #         cap.release()
+
     def eventFilter(self, obj, event):
         try:
             if obj is getattr(self, "preview_time", None):
@@ -727,6 +749,9 @@ class BlueCorrectorSingleGUI(QWidget):
         self.stage_pct = {"ANALYZE": 0.0, "PROCESS": 0.0}
 
         self._video_duration_sec = 0.0
+        self._input_video_w = 0
+        self._input_video_h = 0
+        self._input_video_fps = 0.0
 
         # Preview-related (created lazily)
         self._preview_initialized = False
@@ -792,16 +817,59 @@ class BlueCorrectorSingleGUI(QWidget):
         self.input_path = QLineEdit()
         btn_in = QPushButton("Browse")
         btn_in.clicked.connect(self.browse_input)
+
+        # Video info label (resolution / FPS) shown next to the Browse button
+        self.input_info = QLabel("")
+        self.input_info.setMinimumWidth(160)
+        self.input_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.input_info.setStyleSheet("color: #aaa;")
+
         in_row = QHBoxLayout()
-        in_row.addWidget(self.input_path)
+        in_row.addWidget(self.input_path, 1)
         in_row.addWidget(btn_in)
+        in_row.addWidget(self.input_info)
+
+
         paths_layout.addRow("Input file:", in_row)
 
+        # Clear info if user manually edits the path
+        self.input_path.textChanged.connect(lambda _t: self.input_info.setText(""))
+
         # Output behaviour
-        self.same_folder = QCheckBox("Save next to input as <name>.corrected<ext>")
+        self.same_folder = QCheckBox("Save as <name>.corrected<ext>")
         self.same_folder.setChecked(True)
         self.same_folder.stateChanged.connect(self.on_same_folder_changed)
-        paths_layout.addRow("", self.same_folder)
+        # self.same_folder.setMinimumWidth(160)
+        # paths_layout.addRow("", self.same_folder)
+
+        # Downsample control (moved next to I/O)
+
+        self.downsample_info = QLabel("")
+        self.downsample_info.setMinimumWidth(160)
+        self.downsample_info.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.downsample_info.setStyleSheet("color: #aaa;")
+        self.downsample_factor = QComboBox()
+        # Resolution-aware downscale selector (stores a dict in itemData)
+        self._init_downscale_combo(self.downsample_factor)
+        self.downsample_factor.setToolTip(
+            "Force output height for video processing. The app passes your selection as --max-height plus --force-height to the backend (aspect ratio preserved). "
+            "Lower target heights are faster but reduce output/preview resolution."
+        )
+
+        self.max_fps = QSpinBox()
+        self.max_fps.setRange(0, 240)
+        self.max_fps.setValue(0)
+        self.max_fps.setToolTip("Cap output frame rate (FPS). 0 = no cap.")
+
+        ds_row = QHBoxLayout()
+        ds_row.addWidget(self.downsample_factor)
+        ds_row.addSpacing(8)
+        ds_row.addWidget(QLabel("Max FPS (0=no cap):"))
+        ds_row.addWidget(self.max_fps)
+        # ds_row.addWidget(self.downsample_info, 1)
+        paths_layout.addRow("Max resolution:", ds_row)
+
+        self.downsample_factor.currentIndexChanged.connect(self._update_downsample_info)
 
         self.output_path = QLineEdit()
         btn_out = QPushButton("Browse")
@@ -809,6 +877,7 @@ class BlueCorrectorSingleGUI(QWidget):
         out_row = QHBoxLayout()
         out_row.addWidget(self.output_path)
         out_row.addWidget(btn_out)
+        out_row.addWidget(self.same_folder)
         paths_layout.addRow("Output file:", out_row)
 
         # Auto-reload preview when the input changes (file load / paste / browse).
@@ -1057,7 +1126,7 @@ class BlueCorrectorSingleGUI(QWidget):
         )
 
         self.fast_hs_map_scale = QDoubleSpinBox()
-        self.fast_hs_map_scale.setRange(0.10, 1.00)
+        self.fast_hs_map_scale.setRange(0.01, 1.00)
         self.fast_hs_map_scale.setSingleStep(0.05)
         self.fast_hs_map_scale.setDecimals(2)
         self.fast_hs_map_scale.setValue(0.1)
@@ -1065,17 +1134,11 @@ class BlueCorrectorSingleGUI(QWidget):
         self.fast_hs_map_scale.setEnabled(True)
         self.fast_hs.toggled.connect(self.fast_hs_map_scale.setEnabled)
 
-        self.downsample_factor = QComboBox()
-        self.downsample_factor.addItems(["1 (full)", "2 (half)", "4 (quarter)", "8 (eighth)", "16 (sixteenth)"])
-        self.downsample_factor.setCurrentIndex(0)
-        self.downsample_factor.setToolTip(
-            "Downsample factor for video processing. Higher values are faster but reduce output/preview resolution."
-        )
+
 
         layout_perf.addRow(self.precompute_filters)
         layout_perf.addRow(self.fast_hs)
         layout_perf.addRow("Fast HS map scale (lower=faster)", self.fast_hs_map_scale)
-        layout_perf.addRow("Downsample (processing/preview):", self.downsample_factor)
 
         toolbox.addItem(page_perf, "Performance")
 
@@ -1247,12 +1310,40 @@ class BlueCorrectorSingleGUI(QWidget):
 
         self.input_path.setText(p)
 
+        # # NEW: update resolution / FPS display
+        # self.input_info.setText("")
+        # ext = Path(p).suffix.lower()
+        # if ext in {".mp4", ".mov", ".mkv", ".avi"}:
+        #     info = self._probe_video_info(Path(p))
+        #     self.input_info.setText(info)
+
         # keep your existing logic below unchanged
 
 
         ext = Path(p).suffix.lower()
+        try:
+            self.input_info.setText("")
+        except Exception:
+            pass
         if ext in {".mp4", ".mov", ".mkv", ".avi"}:
             self._video_duration_sec = self._probe_video_duration_seconds(Path(p))
+            # Probe resolution/FPS once input is chosen
+            w, h, fps = self._probe_video_meta(Path(p))
+            self._input_video_w = int(w or 0)
+            self._input_video_h = int(h or 0)
+            self._input_video_fps = float(fps or 0.0)
+            try:
+                self._rebuild_downscale_combo_for_input()
+            except Exception:
+                pass
+            if self._input_video_w > 0 and self._input_video_h > 0:
+                if self._input_video_fps and self._input_video_fps > 0:
+                    self.input_info.setText(f"{self._input_video_w}×{self._input_video_h} @ {self._input_video_fps:.2f} fps")
+                else:
+                    self.input_info.setText(f"{self._input_video_w}×{self._input_video_h}")
+            else:
+                self.input_info.setText("")
+            self._update_downsample_info()
             dur_int = int(max(0, round(self._video_duration_sec)))
             self.segment_only.setEnabled(dur_int > 0)
             self.seg_start_slider.setRange(0, max(0, dur_int))
@@ -1264,6 +1355,17 @@ class BlueCorrectorSingleGUI(QWidget):
             self.on_segment_toggled()
         else:
             self._video_duration_sec = 0.0
+            self._input_video_w = 0
+            self._input_video_h = 0
+            self._input_video_fps = 0.0
+            try:
+                self.input_info.setText("")
+            except Exception:
+                pass
+            try:
+                self._update_downsample_info()
+            except Exception:
+                pass
             self.segment_only.setChecked(False)
             self.segment_only.setEnabled(False)
             self.seg_start_slider.setEnabled(False)
@@ -1364,6 +1466,322 @@ class BlueCorrectorSingleGUI(QWidget):
 
 
     # ---------- Helpers ----------
+    def _init_downscale_combo(self, combo: "QComboBox") -> None:
+        """
+        Fill a combo box with resolution-aware downscale options.
+        Each option stores a small dict in itemData so we don't have to parse labels.
+        Options are (best-effort) aspect-preserving and converted to an integer --downsample factor at runtime.
+        """
+        try:
+            combo.blockSignals(True)
+            combo.clear()
+
+            # Generic labels until we know input W×H. We will repopulate once video meta is probed.
+            # Note: we intentionally prefer "max resolution" targets (box-fit) over fractional folds.
+            items = [
+                ("Original (no limit)", {"mode": "native"}),
+                ("4K (max height 2160)", {"mode": "maxh", "h": 2160}),
+                ("1440p (max height 1440)", {"mode": "maxh", "h": 1440}),
+                ("1080p (max height 1080)", {"mode": "maxh", "h": 1080}),
+                ("720p (max height 720)", {"mode": "maxh", "h": 720}),
+                ("540p (max height 540)", {"mode": "maxh", "h": 540}),
+                ("360p (max height 360)", {"mode": "maxh", "h": 360}),
+            ]
+            for label, data in items:
+                combo.addItem(label, data)
+
+            combo.setCurrentIndex(0)
+        finally:
+            try:
+                combo.blockSignals(False)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _compute_downsample_from_choice(w: int, h: int, choice: object) -> int:
+        """
+        Convert a selection choice (dict stored in itemData) + input resolution into an integer downsample factor (>=1).
+
+        This GUI uses *height-based* "max resolution" presets:
+          - mode="maxh": constrain output height to <= preset height, keep aspect ratio via uniform integer factor.
+        The backend expects an integer --downsample N, so we compute the smallest integer factor that respects the constraint.
+        """
+        w = int(w or 0)
+        h = int(h or 0)
+        if w <= 0 or h <= 0:
+            return 1
+
+        if not isinstance(choice, dict):
+            return 1
+
+        mode = choice.get("mode", "native")
+        if mode == "native":
+            return 1
+
+        import math
+
+        # Scale-based (kept for backwards compatibility / future extension)
+        if mode == "scale":
+            try:
+                s = float(choice.get("scale", 1.0))
+            except Exception:
+                s = 1.0
+            if s >= 0.999:
+                return 1
+            target_w = max(1, int(round(w * s)))
+            target_h = max(1, int(round(h * s)))
+            f_w = w / float(target_w) if target_w > 0 else 1.0
+            f_h = h / float(target_h) if target_h > 0 else 1.0
+            return max(1, int(math.ceil(max(f_w, f_h, 1.0))))
+
+        # Height-based constraint (max output height, preserve aspect ratio)
+        if mode == "maxh":
+            try:
+                mh = int(choice.get("h", 0) or 0)
+            except Exception:
+                mh = 0
+            if mh <= 0 or mh >= h:
+                return 1
+            return max(1, int(math.ceil(h / float(mh))))
+
+        # Legacy box-based (fit within w×h) — still supported if older itemData exists
+        if mode == "box":
+            try:
+                bw = int(choice.get("w", w))
+                bh = int(choice.get("h", h))
+            except Exception:
+                bw, bh = w, h
+            bw = max(1, bw)
+            bh = max(1, bh)
+            scale = min(bw / float(w), bh / float(h), 1.0)
+            if scale >= 0.999:
+                return 1
+            target_w = max(1, int(round(w * scale)))
+            target_h = max(1, int(round(h * scale)))
+            f_w = w / float(target_w) if target_w > 0 else 1.0
+            f_h = h / float(target_h) if target_h > 0 else 1.0
+            return max(1, int(math.ceil(max(f_w, f_h, 1.0))))
+
+        return 1
+
+    def _rebuild_downscale_combo_for_input(self) -> None:
+        """Rebuild downscale dropdown labels once we know the input resolution, preserving the current selection."""
+        try:
+            w = int(getattr(self, "_input_video_w", 0) or 0)
+            h = int(getattr(self, "_input_video_h", 0) or 0)
+            if w <= 0 or h <= 0:
+                return
+
+            prev = None
+            try:
+                prev = self.downsample_factor.currentData()
+            except Exception:
+                prev = None
+
+            self.downsample_factor.blockSignals(True)
+            try:
+                # Rebuild with labels that include the computed effective resolution and factor.
+                self.downsample_factor.clear()
+                base_items = [
+                    ("Original (no limit)", {"mode": "native"}),
+                    ("4K (max height 2160)", {"mode": "maxh", "h": 2160}),
+                    ("1440p (max height 1440)", {"mode": "maxh", "h": 1440}),
+                    ("1080p (max height 1080)", {"mode": "maxh", "h": 1080}),
+                    ("720p (max height 720)", {"mode": "maxh", "h": 720}),
+                    ("540p (max height 540)", {"mode": "maxh", "h": 540}),
+                    ("360p (max height 360)", {"mode": "maxh", "h": 360}),
+                ]
+
+                def _label_with_effective(label: str, data: dict) -> str:
+                    # For display only: show the exact forced output geometry that will be produced
+                    # when using --max-height with --force-height (ratio preserved).
+                    if not isinstance(data, dict) or data.get("mode") == "native":
+                        return f"{label}  ({w}×{h})"
+
+                    if data.get("mode") == "maxh":
+                        try:
+                            mh = int(data.get("h", 0) or 0)
+                        except Exception:
+                            mh = 0
+                        if mh <= 0 or mh >= h:
+                            return f"{label}  ({w}×{h})"
+
+                        target_h = int(mh)
+                        target_w = int(round(w * (float(target_h) / float(h))))
+
+                        # yuv420p friendliness: enforce even dimensions
+                        if target_w > 1:
+                            target_w = target_w & ~1
+                        if target_h > 1:
+                            target_h = target_h & ~1
+                        target_w = max(2, target_w)
+                        target_h = max(2, target_h)
+
+                        return f"{label}  → {target_w}×{target_h} (forced)"
+
+                    # Unknown mode: fall back to native display
+                    return f"{label}  ({w}×{h})"
+                    return f"{label}  → {dw}×{dh} (max height {int(data.get('h', 0) or 0)})"
+
+                for label, data in base_items:
+                    self.downsample_factor.addItem(_label_with_effective(label, data), data)
+                # Enable/disable options based on input height; presets are max-height based.
+
+                try:
+                    model = self.downsample_factor.model()
+                    best_valid_index = 0
+                    for i in range(self.downsample_factor.count()):
+                        d = self.downsample_factor.itemData(i)
+                        valid = True
+                        if isinstance(d, dict) and d.get("mode") == "maxh":
+                            try:
+                                mh = int(d.get("h", 0) or 0)
+                            except Exception:
+                                mw = 0
+                            valid = (mh <= 0) or (mh <= h)
+                        if model is not None and hasattr(model, "item"):
+                            it = model.item(i)
+                            if it is not None:
+                                it.setEnabled(bool(valid))
+                        if valid:
+                            best_valid_index = i
+                    self._best_valid_downscale_index = int(best_valid_index)
+                except Exception:
+                    self._best_valid_downscale_index = 0
+
+                # Try to re-select previous option by matching dict content
+                if isinstance(prev, dict):
+                    for i in range(self.downsample_factor.count()):
+                        d = self.downsample_factor.itemData(i)
+                        if isinstance(d, dict) and d.get("mode") == prev.get("mode"):
+                            if d.get("mode") == "scale" and float(d.get("scale", 0)) == float(prev.get("scale", 0)):
+                                self.downsample_factor.setCurrentIndex(i)
+                                break
+                            if d.get("mode") == "maxh" and int(d.get("w", 0)) == int(prev.get("w", 0)):
+                                self.downsample_factor.setCurrentIndex(i)
+                                break
+                            if d.get("mode") == "native":
+                                self.downsample_factor.setCurrentIndex(i)
+                                break
+                else:
+                    self.downsample_factor.setCurrentIndex(0)
+
+                # Clamp to a valid preset if current selection is disabled (e.g., source is smaller than preset).
+                try:
+                    model = self.downsample_factor.model()
+                    cur = int(self.downsample_factor.currentIndex())
+                    if model is not None and hasattr(model, "item"):
+                        it = model.item(cur)
+                        if it is not None and (not it.isEnabled()):
+                            idx = int(getattr(self, "_best_valid_downscale_index", 0) or 0)
+                            idx = max(0, min(idx, self.downsample_factor.count() - 1))
+                            self.downsample_factor.setCurrentIndex(idx)
+                except Exception:
+                    pass
+            finally:
+                self.downsample_factor.blockSignals(False)
+
+        except Exception:
+            try:
+                self.downsample_factor.blockSignals(False)
+            except Exception:
+                pass
+
+    def _current_downsample_factor(self) -> int:
+        """Return the effective integer downsample factor derived from the current selection and probed input resolution."""
+        try:
+            w = int(getattr(self, "_input_video_w", 0) or 0)
+            h = int(getattr(self, "_input_video_h", 0) or 0)
+            choice = None
+            try:
+                choice = self.downsample_factor.currentData()
+            except Exception:
+                choice = None
+
+            # Fallback for older saved state / unexpected labels: parse leading int if present.
+            if not isinstance(choice, dict):
+                txt = (self.downsample_factor.currentText() or "").strip()
+                try:
+                    return max(1, int(txt.split()[0]))
+                except Exception:
+                    return 1
+
+            return self._compute_downsample_from_choice(w, h, choice)
+        except Exception:
+            return 1
+
+    def _update_downsample_info(self) -> None:
+        """Update the UI label showing the effective output resolution based on a max-height selection."""
+        try:
+            w = int(getattr(self, "_input_video_w", 0) or 0)
+            h = int(getattr(self, "_input_video_h", 0) or 0)
+            if w <= 0 or h <= 0 or not hasattr(self, "downsample_info"):
+                self.downsample_info.setText("")
+                return
+
+            try:
+                choice = self.downsample_factor.currentData()
+            except Exception:
+                choice = None
+
+            # Native / no limit
+            if not isinstance(choice, dict) or choice.get("mode") == "native":
+                self.downsample_info.setText(f"{w}×{h}")
+                return
+
+            if choice.get("mode") == "maxh":
+                import math
+                try:
+                    mh = int(choice.get("h", 0) or 0)
+                except Exception:
+                    mh = 0
+
+                if mh <= 0 or mh >= h:
+                    self.downsample_info.setText(f"{w}×{h}")
+                    return
+
+                # Force exact output height (backend uses --force-height): preserve ratio by deriving width.
+                # Clamp to avoid divide-by-zero.
+                if h <= 0:
+                    self.downsample_info.setText(f"{w}×{h}")
+                    return
+                target_h = mh
+                target_w = int(round(w * (float(target_h) / float(h))))
+                # Enforce even dimensions (yuv420p friendly)
+                if target_w > 1:
+                    target_w = target_w & ~1
+                if target_h > 1:
+                    target_h = target_h & ~1
+                target_w = max(2, target_w)
+                target_h = max(2, target_h)
+
+                self.downsample_info.setText(f"{target_w}×{target_h}  (forced height)")
+                return
+
+            # Fallback: show native
+            self.downsample_info.setText(f"{w}×{h}")
+        except Exception:
+            try:
+                self.downsample_info.setText("")
+            except Exception:
+                pass
+
+    def _probe_video_meta(self, path: Path) -> Tuple[int, int, float]:
+        """Best-effort probe of (width, height, fps) for a video file."""
+        if cv2 is None:
+            return (0, 0, 0.0)
+
+        cap = cv2.VideoCapture(str(path))
+        try:
+            if not cap.isOpened():
+                return (0, 0, 0.0)
+            w = int(cap.get(getattr(cv2, "CAP_PROP_FRAME_WIDTH", 3)) or 0)
+            h = int(cap.get(getattr(cv2, "CAP_PROP_FRAME_HEIGHT", 4)) or 0)
+            fps = float(cap.get(getattr(cv2, "CAP_PROP_FPS", 5)) or 0.0)
+            return (w, h, fps)
+        finally:
+            cap.release()
+
     @staticmethod
     def _format_time(seconds: float) -> str:
         seconds = max(0.0, float(seconds))
@@ -2277,8 +2695,8 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_tone_percent": 0.05,
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
-                "fast_hs": False,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs": True,
+                "fast_hs_map_scale": 0.25,
             },
             "No auto contrast/brightness": {
                 # Same base as Neutral, but disables the auto brightness/contrast stage
@@ -2297,8 +2715,8 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_tone_percent": 0.05,
                 "highlight_radius": 0,
                 "disable_auto_contrast": True,
-                "fast_hs": False,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs": True,
+                "fast_hs_map_scale": 0.25,
             },
             "Vibrant": {
                 # More pop: slightly stronger contrast shaping and slightly punchier blues.
@@ -2317,7 +2735,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "Low light (lift)": {
                 # Designed for darker scenes: more shadow lift, gentler highlights.
@@ -2336,7 +2754,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "Blue water": {
                 "threshold_ratio": 2000,
@@ -2354,7 +2772,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "Green water": {
                 # Counter green/cyan casts typical in shallow water or algae-heavy scenes.
@@ -2373,7 +2791,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "Clarity": {
                 # Adds perceived clarity via a stronger, but still controlled, contrast curve.
@@ -2392,7 +2810,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "Warm lift": {
                 "threshold_ratio": 1800,
@@ -2410,7 +2828,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "More blue": {
                 # Bias towards deeper/cleaner blues (lower BLUE_MAGIC_VALUE).
@@ -2429,7 +2847,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "Stable": {
                 "threshold_ratio": 2200,
@@ -2447,7 +2865,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
             "More blue (stable)": {
                 # Deeper blues + reduced pumping: disable auto-contrast and smooth sampling.
@@ -2466,7 +2884,7 @@ class BlueCorrectorSingleGUI(QWidget):
                 "highlight_radius": 0,
                 "disable_auto_contrast": False,
                 "fast_hs": True,
-                "fast_hs_map_scale": 0.50,
+                "fast_hs_map_scale": 0.25,
             },
         }
 
@@ -3252,14 +3670,31 @@ class BlueCorrectorSingleGUI(QWidget):
             args += ["--fast-hs"]
             args += ["--fast-hs-map-scale", f"{self.fast_hs_map_scale.value():.2f}"]
 
-        # Single-tab only: optional video downsample (affects both processing and preview output)
+        # Single-tab only: optional video max-height (affects both processing and preview output)
         if mode == "video":
+            # Prefer passing an explicit max-height constraint to the backend (aspect ratio preserved).
             try:
-                ds = int(self.downsample_factor.currentText().split()[0])
+                choice = self.downsample_factor.currentData() if hasattr(self, "downsample_factor") else None
             except Exception:
-                ds = 1
-            ds = max(1, ds)
-            args += ["--downsample", str(ds)]
+                choice = None
+
+            # Always keep the base downsample as 1; backend will derive any additional downsample from --max-height.
+            args += ["--downsample", "1"]
+
+            if isinstance(choice, dict) and choice.get("mode") == "maxh":
+                try:
+                    mh = int(choice.get("h", 0) or 0)
+                except Exception:
+                    mh = 0
+                if mh > 0:
+                    args += ["--max-height", str(mh)]
+                    args += ["--force-height"]
+            try:
+                mfps = int(self.max_fps.value())
+            except Exception:
+                mfps = 0
+            if mfps and mfps > 0:
+                args += ["--max-fps", str(mfps)]
         # Optional: process only a selected segment (video mode only)
         # if (
         #     mode == "video"
@@ -3439,18 +3874,21 @@ class BatchProcessorTab(QWidget):
         # Batch downsample (processing) - reduces resolution to speed up batch processing.
         # This is independent from the Single/Segment downsample.
         self.batch_downsample = QComboBox()
-        self.batch_downsample.addItems([
-            "1 (full)",
-            "2 (half)",
-            "4 (quarter)",
-            "8 (eighth)",
-            "16 (sixteenth)",
-            "32 (1/32)",
-        ])
-        self.batch_downsample.setCurrentIndex(0)
+        # Resolution-aware downscale selector (converted to integer --downsample per input video)
+        try:
+            self.single._init_downscale_combo(self.batch_downsample)
+        except Exception:
+            # Fallback (should not happen)
+            self.batch_downsample.addItem("Original", {"mode": "native"})
         self.batch_downsample.setToolTip(
-            "Downsample factor for BATCH processing. Higher values are faster but reduce output resolution."
+            "Max output resolution for BATCH processing. The app converts your selection into an integer --downsample factor "
+            "per input video, based on its actual resolution. Lower targets are faster but reduce output resolution."
         )
+
+        self.batch_max_fps = QSpinBox()
+        self.batch_max_fps.setRange(0, 240)
+        self.batch_max_fps.setValue(0)
+        self.batch_max_fps.setToolTip("Cap output frame rate (FPS) for batch jobs. 0 = no cap.")
 
         self.btn_start = QPushButton("Start batch")
         self.btn_stop = QPushButton("Stop all")
@@ -3470,8 +3908,11 @@ class BatchProcessorTab(QWidget):
         ctl.addWidget(QLabel("Max parallel:"))
         ctl.addWidget(self.max_parallel)
         ctl.addSpacing(12)
-        ctl.addWidget(QLabel("Downsample:"))
+        ctl.addWidget(QLabel("Max res:"))
         ctl.addWidget(self.batch_downsample)
+        ctl.addSpacing(8)
+        ctl.addWidget(QLabel("Max FPS (0=no cap):"))
+        ctl.addWidget(self.batch_max_fps)
         ctl.addSpacing(12)
         ctl.addWidget(self.btn_start)
         ctl.addWidget(self.btn_stop)
@@ -3660,13 +4101,28 @@ class BatchProcessorTab(QWidget):
         if not self.single.precompute_filters.isChecked():
             args += ["--no-precompute-filters"]
 
-        # Batch-only downsample factor (independent of Single/Segment tab)
+        # Batch max-height target -> pass through to backend; backend derives any additional downsample.
         try:
-            ds = int(self.batch_downsample.currentText().split()[0])
+            choice = self.batch_downsample.currentData()
         except Exception:
-            ds = 1
-        ds = max(1, ds)
-        args += ["--downsample", str(ds)]
+            choice = None
+
+        # Keep base downsample at 1; backend will apply max-height constraint uniformly.
+        args += ["--downsample", "1"]
+        if isinstance(choice, dict) and choice.get("mode") == "maxh":
+            try:
+                mh = int(choice.get("h", 0) or 0)
+            except Exception:
+                mh = 0
+            if mh > 0:
+                args += ["--max-height", str(mh)]
+                args += ["--force-height"]
+        try:
+            mfps = int(self.batch_max_fps.value())
+        except Exception:
+            mfps = 0
+        if mfps and mfps > 0:
+            args += ["--max-fps", str(mfps)]
 
         return args
 
